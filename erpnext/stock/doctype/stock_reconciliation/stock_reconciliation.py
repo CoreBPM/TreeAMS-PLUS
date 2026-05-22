@@ -83,6 +83,7 @@ class StockReconciliation(StockController):
 		self.set_total_qty_and_amount()
 		self.validate_putaway_capacity()
 		self.validate_inventory_dimension()
+		self.validate_uom_is_integer("stock_uom", "qty")
 
 		if self._action == "submit":
 			self.validate_reserved_stock()
@@ -241,6 +242,7 @@ class StockReconciliation(StockController):
 				serial_and_batch_bundle = frappe.get_doc(
 					{
 						"doctype": "Serial and Batch Bundle",
+						"company": self.company,
 						"item_code": item.item_code,
 						"warehouse": item.warehouse,
 						"posting_datetime": combine_datetime(self.posting_date, self.posting_time),

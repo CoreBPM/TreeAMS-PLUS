@@ -1,7 +1,6 @@
 # Copyright (c) 2017, Frappe Technologies Pvt. Ltd. and Contributors
 # See license.txt
 import frappe
-from frappe.tests import IntegrationTestCase
 from frappe.utils import add_to_date, flt, getdate, now_datetime, nowdate
 
 from erpnext.controllers.item_variant import create_variant
@@ -25,9 +24,10 @@ from erpnext.stock.doctype.stock_reconciliation.test_stock_reconciliation import
 	create_stock_reconciliation,
 )
 from erpnext.stock.doctype.stock_reservation_entry.stock_reservation_entry import StockReservation
+from erpnext.tests.utils import ERPNextTestSuite
 
 
-class TestProductionPlan(IntegrationTestCase):
+class TestProductionPlan(ERPNextTestSuite):
 	def setUp(self):
 		for item in [
 			"Test Production Item 1",
@@ -55,9 +55,6 @@ class TestProductionPlan(IntegrationTestCase):
 		}.items():
 			if not frappe.db.get_value("BOM", {"item": item}):
 				make_bom(item=item, raw_materials=raw_materials)
-
-	def tearDown(self) -> None:
-		frappe.db.rollback()
 
 	def test_production_plan_mr_creation(self):
 		"Test if MRs are created for unavailable raw materials."
@@ -549,7 +546,9 @@ class TestProductionPlan(IntegrationTestCase):
 			make_rm_stock_entry(sco.name)
 			scr = make_subcontracting_receipt(sco.name)
 			scr.submit()
-			scr_make_purchase_receipt(scr.name).submit()
+			doc = scr_make_purchase_receipt(scr.name)
+			doc.currency = "INR"
+			doc.submit()
 
 		fg_item = "Test Motherboard 1"
 		bom_tree_1 = {"Test Laptop 1": {fg_item: {"Test Motherboard Wires 1": {}}}}
@@ -969,8 +968,6 @@ class TestProductionPlan(IntegrationTestCase):
 		pln.get_so_items()
 		self.assertEqual(pln.po_items[0].item_code, "PIV-RED")
 		self.assertEqual(pln.po_items[0].bom_no, parent_bom.name)
-
-		frappe.db.rollback()
 
 	def test_get_sales_order_items_for_product_bundle(self):
 		"""Testing the Planned Qty for Product Bundle Item"""
@@ -2878,8 +2875,12 @@ def make_bom(**args):
 			"company": args.company or "_Test Company",
 			"routing": args.routing,
 			"with_operations": args.with_operations or 0,
+			"process_loss_percentage": args.process_loss_percentage or 0,
 		}
 	)
+
+	if args.backflush_based_on:
+		bom.backflush_based_on = args.backflush_based_on
 
 	if args.operating_cost_per_bom_quantity:
 		bom.fg_based_operating_cost = 1
@@ -2898,6 +2899,23 @@ def make_bom(**args):
 				"source_warehouse": args.source_warehouse,
 			},
 		)
+
+	if args.scrap_items:
+		for item in args.scrap_items:
+			item_doc = frappe.get_doc("Item", item)
+			bom.append(
+				"secondary_items",
+				{
+					"type": "Scrap",
+					"item_code": item,
+					"item_name": item,
+					"uom": item_doc.stock_uom,
+					"stock_uom": item_doc.stock_uom,
+					"qty": args.scrap_qty or 1,
+					"cost_allocation_per": args.scrap_cost_allocation_per or 10,
+					"process_loss_per": args.scrap_process_loss_per or 10,
+				},
+			)
 
 	if not args.do_not_save:
 		bom.insert(ignore_permissions=True)

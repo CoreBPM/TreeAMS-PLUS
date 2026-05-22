@@ -4,17 +4,18 @@
 import json
 
 import frappe
-from frappe.tests import IntegrationTestCase, change_settings
+from frappe.tests import change_settings
 from frappe.utils import add_days, add_months, flt, getdate, nowdate
 
 from erpnext.controllers.accounts_controller import InvalidQtyError, update_child_qty_rate
 from erpnext.selling.doctype.quotation.quotation import make_sales_order
-from erpnext.setup.utils import get_exchange_rate
-
-EXTRA_TEST_RECORD_DEPENDENCIES = ["Product Bundle"]
+from erpnext.tests.utils import ERPNextTestSuite
 
 
-class TestQuotation(IntegrationTestCase):
+class TestQuotation(ERPNextTestSuite):
+	def setUp(self):
+		self.load_test_records("Quotation")
+
 	def test_update_child_quotation_add_item(self):
 		from erpnext.stock.doctype.item.test_item import make_item
 
@@ -182,7 +183,62 @@ class TestQuotation(IntegrationTestCase):
 
 		self.assertTrue(quotation.payment_schedule)
 
-	@IntegrationTestCase.change_settings(
+	def test_terms_attachments_are_copied_to_quotation(self):
+		terms = make_terms_and_conditions(copy_attachments_to_transaction=True)
+		first_attachment = make_file_attachment(
+			"Terms and Conditions",
+			terms.name,
+			content="First terms attachment",
+		)
+
+		quotation = make_quotation(do_not_save=1)
+		quotation.tc_name = terms.name
+		quotation.insert()
+
+		self.assertEqual(get_attachment_urls("Quotation", quotation.name), {first_attachment.file_url})
+
+		second_attachment = make_file_attachment(
+			"Terms and Conditions",
+			terms.name,
+			content="Second terms attachment",
+		)
+		quotation.valid_till = add_days(getdate(quotation.valid_till), 1)
+		quotation.save()
+
+		quotation_attachments = get_attachment_urls("Quotation", quotation.name)
+		self.assertEqual(quotation_attachments, {first_attachment.file_url})
+		self.assertNotIn(second_attachment.file_url, quotation_attachments)
+
+		new_terms = make_terms_and_conditions(copy_attachments_to_transaction=True)
+		new_terms_attachment = make_file_attachment(
+			"Terms and Conditions",
+			new_terms.name,
+			content="Attachment from updated terms",
+		)
+		quotation.tc_name = new_terms.name
+		quotation.valid_till = add_days(getdate(quotation.valid_till), 1)
+		quotation.save()
+
+		self.assertEqual(
+			get_attachment_urls("Quotation", quotation.name),
+			{first_attachment.file_url, new_terms_attachment.file_url},
+		)
+
+	def test_terms_attachments_are_not_copied_when_disabled(self):
+		terms = make_terms_and_conditions(copy_attachments_to_transaction=False)
+		make_file_attachment(
+			"Terms and Conditions",
+			terms.name,
+			content="Terms attachment should stay on the template",
+		)
+
+		quotation = make_quotation(do_not_save=1)
+		quotation.tc_name = terms.name
+		quotation.insert()
+
+		self.assertFalse(get_attachment_urls("Quotation", quotation.name))
+
+	@ERPNextTestSuite.change_settings(
 		"Accounts Settings",
 		{"automatically_fetch_payment_terms": 1},
 	)
@@ -326,7 +382,7 @@ class TestQuotation(IntegrationTestCase):
 		sales_order.delivery_date = nowdate()
 		sales_order.insert()
 
-	@IntegrationTestCase.change_settings(
+	@ERPNextTestSuite.change_settings(
 		"Accounts Settings",
 		{
 			"add_taxes_from_item_tax_template": 0,
@@ -876,7 +932,7 @@ class TestQuotation(IntegrationTestCase):
 		quotation.items[0].conversion_factor = 2.23
 		self.assertRaises(frappe.ValidationError, quotation.save)
 
-	@IntegrationTestCase.change_settings(
+	@ERPNextTestSuite.change_settings(
 		"Accounts Settings",
 		{"add_taxes_from_item_tax_template": 1, "add_taxes_from_taxes_and_charges_template": 0},
 	)
@@ -944,7 +1000,7 @@ class TestQuotation(IntegrationTestCase):
 		self.assertEqual(quotation.rounding_adjustment, 0)
 		self.assertEqual(quotation.rounded_total, 0)
 
-	@IntegrationTestCase.change_settings("Selling Settings", {"allow_zero_qty_in_quotation": 1})
+	@ERPNextTestSuite.change_settings("Selling Settings", {"allow_zero_qty_in_quotation": 1})
 	def test_so_from_zero_qty_quotation(self):
 		from erpnext.selling.doctype.quotation.quotation import make_sales_order
 		from erpnext.stock.doctype.item.test_item import make_item
@@ -977,6 +1033,7 @@ class TestQuotation(IntegrationTestCase):
 		quotation.reload()
 		self.assertEqual(quotation.status, "Ordered")
 
+	@ERPNextTestSuite.change_settings("Selling Settings", {"allow_multiple_items": 1})
 	def test_duplicate_items_in_quotation(self):
 		from erpnext.selling.doctype.quotation.quotation import make_sales_order
 		from erpnext.stock.doctype.item.test_item import make_item
@@ -1023,15 +1080,15 @@ class TestQuotation(IntegrationTestCase):
 		quotation.reload()
 		self.assertEqual(quotation.status, "Ordered")
 
-	@change_settings("Accounts Settings", {"allow_pegged_currencies_exchange_rates": True})
+	@ERPNextTestSuite.change_settings("Accounts Settings", {"allow_pegged_currencies_exchange_rates": True})
 	def test_make_quotation_qar_to_inr(self):
 		quotation = make_quotation(
 			currency="QAR",
-			transaction_date="2026-06-04",
+			transaction_date="2026-01-01",
 		)
 
 		cache = frappe.cache()
-		key = "currency_exchange_rate_{}:{}:{}".format("2026-06-04", "QAR", "INR")
+		key = "currency_exchange_rate_{}:{}:{}".format("2026-01-01", "QAR", "INR")
 		value = cache.get(key)
 		expected_rate = flt(value) / 3.64
 
@@ -1076,7 +1133,7 @@ class TestQuotation(IntegrationTestCase):
 		quotation.reload()
 		self.assertEqual(quotation.status, "Open")
 
-	@IntegrationTestCase.change_settings(
+	@ERPNextTestSuite.change_settings(
 		"Accounts Settings",
 		{"automatically_fetch_payment_terms": 1},
 	)
@@ -1143,6 +1200,42 @@ def get_quotation_dict(party_name=None, item_code=None):
 		"doctype": "Quotation",
 		"party_name": party_name,
 		"items": [{"item_code": item_code, "qty": 1, "rate": 100}],
+	}
+
+
+def make_terms_and_conditions(copy_attachments_to_transaction=False):
+	return frappe.get_doc(
+		{
+			"doctype": "Terms and Conditions",
+			"title": f"_Test Terms and Conditions {frappe.generate_hash(length=8)}",
+			"selling": 1,
+			"terms": "Test terms",
+			"copy_attachments_to_transaction": 1 if copy_attachments_to_transaction else 0,
+		}
+	).insert()
+
+
+def make_file_attachment(doctype, docname, content):
+	return frappe.get_doc(
+		{
+			"doctype": "File",
+			"file_name": f"terms-attachment-{frappe.generate_hash(length=8)}.txt",
+			"attached_to_doctype": doctype,
+			"attached_to_name": docname,
+			"content": content,
+		}
+	).insert()
+
+
+def get_attachment_urls(doctype, docname):
+	return {
+		file.file_url
+		for file in frappe.get_all(
+			"File",
+			filters={"attached_to_doctype": doctype, "attached_to_name": docname},
+			fields=["file_url"],
+		)
+		if file.file_url
 	}
 
 
